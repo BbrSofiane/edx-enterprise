@@ -6,6 +6,7 @@ Client for communicating with the Enterprise API.
 import json
 from collections import OrderedDict
 from logging import getLogger
+from retry import retry
 
 from edx_rest_api_client.client import EdxRestApiClient
 from requests.exceptions import ConnectionError, Timeout  # pylint: disable=redefined-builtin
@@ -139,6 +140,7 @@ class EnterpriseCatalogApiClient(JwtLmsApiClient):
             )
             return {}
 
+    @retry(exceptions=(ConnectionError, Timeout), tries=2, delay=4, logger=LOGGER)
     @JwtLmsApiClient.refresh_token
     def get_content_metadata(self, enterprise_customer, enterprise_catalogs=None):
         """
@@ -162,11 +164,12 @@ class EnterpriseCatalogApiClient(JwtLmsApiClient):
                 for item in utils.traverse_pagination(response, endpoint):
                     content_id = utils.get_content_metadata_item_id(item)
                     content_metadata[content_id] = item
-            except (SlumberBaseException, ConnectionError, Timeout) as exc:
-                LOGGER.exception(
-                    'Failed to get content metadata for Catalog [%s] in enterprise-catalog due to: [%s]',
-                    catalog_uuid, str(exc)
-                )
+            except SlumberBaseException as exc:
+               LOGGER.exception(
+                   'Failed to get content metadata for Catalog [%s] in enterprise-catalog due to: [%s]',
+                   catalog_uuid, str(exc)
+               )
+               raise
 
         return list(content_metadata.values())
 
