@@ -469,6 +469,17 @@ class GradesApiClient(JwtLmsApiClient):
 
         raise HttpNotFoundError('No grade record found for course={}, username={}'.format(course_id, username))
 
+    @JwtLmsApiClient.refresh_token
+    def get_course_assessment_grades(self, course_id, username):
+        """
+        Placeholder
+        """
+        results = self.client.gradebook(course_id).get(user_contains=username).get('results')
+        for row in results:
+            if row.get('username') == username:
+                return row.get('section_breakdown')
+
+        raise HttpNotFoundError('No grade record found for course={}, username={}'.format(course_id, username))
 
 class CertificatesApiClient(JwtLmsApiClient):
     """

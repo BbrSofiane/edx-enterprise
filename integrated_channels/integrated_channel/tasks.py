@@ -128,6 +128,29 @@ def transmit_single_learner_data(username, course_run_id):
             is_passing=True
         )
 
+
+@shared_task
+def transmit_single_subsection_learner_data(username, course_run_id, subsection_id, grade):
+    """
+    Placeholder
+    """
+    start = time.time()
+    user = User.objects.get(username=username)
+    enterprise_customer = get_enterprise_customer_for_user(user)
+    channel_utils = IntegratedChannelCommandUtils()
+
+    # Transmit the learner data to each integrated channelStarting Export
+    for channel in channel_utils.get_integrated_channels(
+            {'channel': None, 'enterprise_customer': enterprise_customer.uuid}
+    ):
+        integrated_channel = INTEGRATED_CHANNEL_CHOICES[channel.channel_code()].objects.get(pk=channel.pk)
+        integrated_channel.transmit_single_subsection_learner_data(
+            learner_to_transmit=user,
+            course_run_id=course_run_id,
+            grade=grade,
+            subsection_id=subsection_id
+        )
+
     duration = time.time() - start
     LOGGER.info(
         '[Integrated Channel] Single learner data transmission task finished.'
@@ -136,6 +159,32 @@ def transmit_single_learner_data(username, course_run_id):
             course_run=course_run_id,
             duration=duration))
 
+
+@shared_task
+def transmit_subsection_learner_data(username, channel_code, channel_pk):
+    """
+    Placeholder
+    """
+    start = time.time()
+    api_user = User.objects.get(username=username)
+    integrated_channel = INTEGRATED_CHANNEL_CHOICES[channel_code].objects.get(pk=channel_pk)
+    generate_formatted_log(
+        'Batch processing assessment level reporting for integrated channel. Configuration: {configuration}'.format(
+            configuration=integrated_channel,
+        ),
+        channel_name=channel_code,
+        enterprise_customer_identifier=api_user.username
+    )
+
+    # Exceptions during transmission are caught and saved within the audit so no need to try/catch here
+    integrated_channel.transmit_subsection_learner_data(api_user)
+    duration = time.time() - start
+    LOGGER.info(
+        '[Integrated Channel] Bulk learner data transmission task finished.'
+        'Duration: {duration}, Username: {username}'.format(
+            username=username,
+            duration=duration)
+    )
 
 @shared_task
 def unlink_inactive_learners(channel_code, channel_pk):

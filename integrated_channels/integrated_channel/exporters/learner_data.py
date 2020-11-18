@@ -50,6 +50,9 @@ class LearnerExporter(Exporter):
         self.certificates_api = None
         self.course_api = None
         self.course_enrollment_api = None
+
+        # Cached course details data from the Course API.
+        self.course_details = dict()
         super(LearnerExporter, self).__init__(user, enterprise_configuration)
 
     @property
@@ -79,6 +82,133 @@ class LearnerExporter(Exporter):
         Returns the string used for an audit course grade.
         """
         return self.GRADE_AUDIT
+
+    def fetch_course_details(self, course_details, enrollment_course_id):
+        """
+        Placeholder
+        """
+        # Check if first run or if the cached course ID doesn't match the enrollment course ID
+        if course_details is None or course_details['course_id'] != enrollment_course_id:
+            if self.course_api is None:
+                self.course_api = CourseApiClient()
+            course_details = self.course_api.get_course_details(enrollment_course_id)
+
+        if course_details is None:
+            return None
+
+        return course_details
+
+
+    def bulk_assessment_level_export(self, **kwargs):
+        """
+        placeholder
+        """
+        channel_name = kwargs.get('app_label')
+        enrollment_queryset = EnterpriseCourseEnrollment.objects.select_related(
+            'enterprise_customer_user'
+        ).filter(
+            enterprise_customer_user__enterprise_customer=self.enterprise_customer,
+            enterprise_customer_user__active=True,
+        ).order_by('course_id')
+
+        # Fetch course details from the Course API, and cache between calls.
+        course_details = None
+
+        # Create a record of each subsection from every enterprise enrollment
+        for enterprise_enrollment in enrollment_queryset:
+            course_id = enterprise_enrollment.course_id
+            course_details = self.fetch_course_details(course_details, course_id)
+            if not course_details:
+                continue
+
+            if not LearnerExporter.has_data_sharing_consent(enterprise_enrollment):
+                continue
+
+            assessment_grade_data = self._collect_assessment_grades_data(enterprise_enrollment)
+
+            records = self.get_learner_assessment_data_records(
+                enterprise_enrollment=enterprise_enrollment,
+                assessment_grade_data=assessment_grade_data,
+            )
+            if records:
+                # There are some cases where we won't receive a record from the above
+                # method; right now, that should only happen if we have an Enterprise-linked
+                # user for the integrated channel, and transmission of that user's
+                # data requires an upstream user identifier that we don't have (due to a
+                # failure of SSO or similar). In such a case, `get_learner_data_record`
+                # would return None, and we'd simply skip yielding it here.
+                for record in records:
+                    yield record
+
+    def single_assessment_level_export(self, **kwargs):
+        """
+        placeholder
+        """
+        channel_name = kwargs.get('app_label')
+        learner_to_transmit = kwargs.get('learner_to_transmit', None)
+        TransmissionAudit = kwargs.get('TransmissionAudit', None)  # pylint: disable=invalid-name
+        course_run_id = kwargs.get('course_run_id', None)
+        grade = kwargs.get('grade', None)
+        subsection_id = kwargs.get('subsection_id')
+        enrollment_queryset = EnterpriseCourseEnrollment.objects.select_related(
+            'enterprise_customer_user'
+        ).filter(
+            enterprise_customer_user__active=True,
+            enterprise_customer_user__user_id=learner_to_transmit.id,
+            course_id=course_run_id,
+        ).order_by('course_id')
+
+        # We are transmitting for a single enrollment, so grab just the one.
+        enterprise_enrollment = enrollment_queryset.first()
+
+        already_transmitted = is_already_transmitted(
+            TransmissionAudit,
+            enterprise_enrollment.id,
+            grade,
+            subsection_id
+        )
+        if TransmissionAudit and already_transmitted:
+            None
+
+        # No caching because we're only fetching one course detail
+        course_details = self.fetch_course_details(None, course_run_id)
+
+        if not course_details:
+            None
+
+        if not LearnerExporter.has_data_sharing_consent(enterprise_enrollment):
+            None
+
+        assessment_grade_data = self._collect_assessment_grades_data(enterprise_enrollment)
+
+        records = self.get_learner_assessment_data_records(
+            enterprise_enrollment=enterprise_enrollment,
+            assessment_grade_data=assessment_grade_data,
+        )
+        if records:
+            # There are some cases where we won't receive a record from the above
+            # method; right now, that should only happen if we have an Enterprise-linked
+            # user for the integrated channel, and transmission of that user's
+            # data requires an upstream user identifier that we don't have (due to a
+            # failure of SSO or similar). In such a case, `get_learner_data_record`
+            # would return None, and we'd simply skip yielding it here.
+            for record in records:
+                yield record
+
+    @staticmethod
+    def has_data_sharing_consent(enterprise_enrollment):
+        """
+        placeholder text
+        """
+        consent = DataSharingConsent.objects.proxied_get(
+            username=enterprise_enrollment.enterprise_customer_user.username,
+            course_id=enterprise_enrollment.course_id,
+            enterprise_customer=enterprise_enrollment.enterprise_customer_user.enterprise_customer
+        )
+        if not consent.granted or enterprise_enrollment.audit_reporting_disabled:
+            return False
+
+        return True
 
     def export(self, **kwargs):  # pylint: disable=R0915
         """
@@ -204,13 +334,8 @@ class LearnerExporter(Exporter):
                 )
                 continue
 
-            consent = DataSharingConsent.objects.proxied_get(
-                username=enterprise_enrollment.enterprise_customer_user.username,
-                course_id=enterprise_enrollment.course_id,
-                enterprise_customer=enterprise_enrollment.enterprise_customer_user.enterprise_customer
-            )
-
-            if not consent.granted or enterprise_enrollment.audit_reporting_disabled:
+            if (not LearnerExporter.has_data_sharing_consent(enterprise_enrollment) or
+                    enterprise_enrollment.audit_reporting_disabled):
                 continue
 
             # For instructor-paced and not audit courses, let the certificate determine course completion
@@ -289,6 +414,32 @@ class LearnerExporter(Exporter):
                 # would return None, and we'd simply skip yielding it here.
                 for record in records:
                     yield record
+
+    def get_learner_assessment_data_records(
+            self,
+            enterprise_enrollment,
+            assessment_grade_data
+    ):
+        """
+        Placeholder
+        """
+        # pylint: disable=invalid-name
+        LearnerDataTransmissionAudit = apps.get_model('integrated_channel', 'LearnerDataTransmissionAudit')
+        user_subsection_audits = []
+        # Create an audit for each of the subsections in the course data.
+        for subsection_name, subsection_data in assessment_grade_data.items():
+            subsection_percent_grade = subsection_data.get('grade')
+            subsection_id = subsection_data.get('subsection_id')
+            # Sanity check for a grade to report
+            if not subsection_percent_grade or not subsection_id:
+                continue
+
+            user_subsection_audits.append(LearnerDataTransmissionAudit(
+                enterprise_course_enrollment_id=enterprise_enrollment.id,
+                course_id=enterprise_enrollment.course_id,
+                subsection_id=subsection_id,
+                grade=subsection_percent_grade,
+            ))
 
     def get_learner_data_records(
             self,
@@ -371,6 +522,40 @@ class LearnerExporter(Exporter):
             percent_grade = None
 
         return completed_date, grade, is_passing, percent_grade
+
+    def _collect_assessment_grades_data(self, enterprise_enrollment):
+        """
+        Placeholder
+        """
+        if self.grades_api is None:
+            self.grades_api = GradesApiClient(self.user)
+
+        course_id = enterprise_enrollment.course_id
+        username = enterprise_enrollment.enterprise_customer_user.user.username
+        try:
+            assessment_grades_data = self.grades_api.get_course_assessment_grades(course_id, username)
+        except HttpNotFoundError as error:
+            if hasattr(error, 'response'):
+                response_content = error.response.json()  # pylint: disable=no-member
+                if response_content.get('error_code', '') == 'user_not_enrolled':
+                    return {}
+
+            return {}
+
+        assessment_grades = {}
+        for grade in assessment_grades_data:
+            if not grade.get('attempted'):
+                continue
+            assessment_grades[grade.get('subsection_name')] = {
+                'grade_category': grade.get('category'),
+                'grade': grade.get('percent'),
+                'assessment_label': grade.get('label'),
+                'grade_point_score': grade.get('score_earned'),
+                'grade_points_possible': grade.get('score_possible'),
+                'subsection_id': grade.get('module_id')
+            }
+
+        return assessment_grades
 
     def _collect_grades_data(self, enterprise_enrollment, course_details, is_audit_enrollment):
         """
