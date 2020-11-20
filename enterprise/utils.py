@@ -1446,10 +1446,7 @@ def get_platform_logo_url():
     Return an absolute URL of the platform logo using the branding api
     """
     # Return fake URL for tests rather than mock get_logo_url for every test using EnterpriseCustomer
-    return urljoin(
-        settings.LMS_ROOT_URL,
-        get_logo_url()
-    ) if get_logo_url else 'http://fake.url'
+    return get_logo_url() if get_logo_url else 'http://fake.url'
 
 
 def create_tableau_user(user_id, enterprise_customer_user):

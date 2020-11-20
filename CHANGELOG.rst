@@ -16,6 +16,11 @@ Change Log
 Unreleased
 -----------
 
+[3.12.3]
+--------
+
+* Rebranding update: removing use of urljoin in get_platform_logo_url
+
 [3.12.2]
 --------
 
